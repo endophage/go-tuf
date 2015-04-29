@@ -296,6 +296,7 @@ func (r *Repo) setMeta(name string, meta interface{}) error {
 }
 
 func (r *Repo) Sign(name string) error {
+	fmt.Println("Signing ", name)
 	role := strings.TrimSuffix(name, ".json")
 	if !keys.ValidRole(role) {
 		return errors.ErrInvalidRole{role}
@@ -331,6 +332,7 @@ func (r *Repo) Sign(name string) error {
 // keys are returned (revoked root keys still need to sign new root metadata so
 // clients can verify the new root.json and update their keys db accordingly).
 func (r *Repo) getKeys(name string) ([]*keys.PublicKey, error) {
+	fmt.Println("getKeys ", name)
 	localKeys, err := r.local.GetKeys(name)
 	if err != nil {
 		return nil, err
