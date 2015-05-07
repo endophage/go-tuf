@@ -4,8 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"time"
 
+	//	tuf "github.com/flynn/go-tuf"
 	"github.com/flynn/go-tuf/Godeps/_workspace/src/github.com/tent/canonical-json-go"
 )
 
@@ -116,10 +118,11 @@ func (f FileMeta) HashAlgorithms() []string {
 }
 
 type Targets struct {
-	Type    string    `json:"_type"`
-	Version int       `json:"version"`
-	Expires time.Time `json:"expires"`
-	Targets Files     `json:"targets"`
+	Type        string      `json:"_type"`
+	Version     int         `json:"version"`
+	Expires     time.Time   `json:"expires"`
+	Targets     Files       `json:"targets"`
+	Delegations Delegations `json:"delegations,omitempty"`
 }
 
 func NewTargets() *Targets {
@@ -128,6 +131,76 @@ func NewTargets() *Targets {
 		Expires: DefaultExpires("targets"),
 		Targets: make(Files),
 	}
+}
+
+type Delegations struct {
+	Keys  map[string]Key  `json:"keys"`
+	Roles []DelegatedRole `json:"roles"`
+}
+
+func NewDelegations() *Delegations {
+	return &Delegations{
+		Keys:  make(map[string]Key),
+		Roles: make([]DelegatedRole, 0),
+	}
+}
+
+func (d *Delegations) AddKeys(ks ...Key) {
+	for _, k := range ks {
+		d.Keys[k.ID()] = k
+	}
+}
+
+func (d *Delegations) AddRoles(rs ...DelegatedRole) error {
+	for _, r := range rs {
+		for _, kID := range r.KeyIDs {
+			if _, ok := d.Keys[kID]; !ok {
+				//return tuf.ErrKeyNotFound{Role: r.Name, KeyID: kID}
+				return errors.New("Key must be added before role")
+			}
+		}
+	}
+	d.Roles = append(d.Roles, rs...)
+	return nil
+}
+
+type DelegatedRole struct {
+	Role
+	Name             string   `json:"name"`
+	PathHashPrefixes []string `json:"path_hash_prefixes,omitempty"`
+	Paths            []string `json:"paths,omitempty"`
+}
+
+func NewDelegatedRole(name string, keyIDs []string, threshold int) (*DelegatedRole, error) {
+	return &DelegatedRole{
+		Role: Role{
+			KeyIDs:    keyIDs,
+			Threshold: threshold,
+		},
+		Name:             name,
+		PathHashPrefixes: make([]string, 0),
+		Paths:            make([]string, 0),
+	}, nil
+}
+
+func (dr *DelegatedRole) AddPathHashPrefixes(prefixes ...string) error {
+	// can only have paths or path_hash_prefixes, not both
+	if len(dr.Paths) > 0 {
+		// TODO: need an error to represent creating an invalid delegated role
+		return nil
+	}
+	dr.PathHashPrefixes = append(dr.PathHashPrefixes, prefixes...)
+	return nil
+}
+
+func (dr *DelegatedRole) AddPaths(paths ...string) error {
+	// can only have paths or path_hash_prefixes, not both
+	if len(dr.PathHashPrefixes) > 0 {
+		// TODO: need an error to represent creating an invalid delegated role
+		return nil
+	}
+	dr.Paths = append(dr.Paths, paths...)
+	return nil
 }
 
 type Timestamp struct {

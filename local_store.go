@@ -31,7 +31,7 @@ type memoryStore struct {
 	keys  map[string][]*data.Key
 }
 
-func (m *memoryStore) GetMeta() (map[string]json.RawMessage, error) {
+func (m *memoryStore) GetMeta(roles ...string) (map[string]json.RawMessage, error) {
 	return m.meta, nil
 }
 
@@ -111,14 +111,17 @@ func (f *fileSystemStore) stagedDir() string {
 	return filepath.Join(f.dir, "staged")
 }
 
-func (f *fileSystemStore) GetMeta() (map[string]json.RawMessage, error) {
+func (f *fileSystemStore) GetMeta(roles ...string) (map[string]json.RawMessage, error) {
 	meta := make(map[string]json.RawMessage)
 	var err error
 	notExists := func(path string) bool {
 		_, err := os.Stat(path)
 		return os.IsNotExist(err)
 	}
-	for _, name := range topLevelManifests {
+	if len(roles) == 0 {
+		roles = topLevelManifests
+	}
+	for _, name := range roles {
 		path := filepath.Join(f.stagedDir(), name)
 		if notExists(path) {
 			path = filepath.Join(f.repoDir(), name)

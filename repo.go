@@ -2,6 +2,8 @@ package tuf
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -38,7 +40,7 @@ var snapshotManifests = []string{
 type targetsWalkFunc func(path string, target io.Reader) error
 
 type LocalStore interface {
-	GetMeta() (map[string]json.RawMessage, error)
+	GetMeta(roles ...string) (map[string]json.RawMessage, error)
 	SetMeta(string, json.RawMessage) error
 
 	// WalkStagedTargets calls targetsFn for each staged target file in paths.
@@ -135,6 +137,26 @@ func (r *Repo) snapshot() (*data.Snapshot, error) {
 
 func (r *Repo) targets() (*data.Targets, error) {
 	targetsJSON, ok := r.meta["targets.json"]
+	if !ok {
+		return data.NewTargets(), nil
+	}
+	s := &data.Signed{}
+	if err := json.Unmarshal(targetsJSON, s); err != nil {
+		return nil, err
+	}
+	targets := &data.Targets{}
+	if err := json.Unmarshal(s.Signed, targets); err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
+func (r *Repo) delegatedTargets(role string) (*data.Targets, error) {
+	meta, err := r.local.GetMeta(role)
+	if err != nil {
+		return nil, err
+	}
+	targetsJSON, ok := meta[role]
 	if !ok {
 		return data.NewTargets(), nil
 	}
@@ -395,15 +417,15 @@ func (r *Repo) AddTargetsWithExpires(paths []string, custom json.RawMessage, exp
 		return ErrInvalidExpires{expires}
 	}
 
-	t, err := r.targets()
-	if err != nil {
-		return err
-	}
+	//	t, err := r.targets()
+	//	if err != nil {
+	//		return err
+	//	}
 	normalizedPaths := make([]string, len(paths))
 	for i, path := range paths {
 		normalizedPaths[i] = util.NormalizeTarget(path)
 	}
-	if err := r.local.WalkStagedTargets(normalizedPaths, func(path string, target io.Reader) (err error) {
+	if err := r.local.WalkStagedTargets(normalizedPaths, func(path string, target io.Reader) error {
 		meta, err := util.GenerateFileMeta(target, r.hashAlgorithms...)
 		if err != nil {
 			return err
@@ -411,14 +433,78 @@ func (r *Repo) AddTargetsWithExpires(paths []string, custom json.RawMessage, exp
 		if len(custom) > 0 {
 			meta.Custom = &custom
 		}
-		t.Targets[util.NormalizeTarget(path)] = meta
-		return nil
+		//t.Targets[util.NormalizeTarget(path)] = meta
+		//t.Expires = expires.Round(time.Second)
+		//t.Version++
+		//return r.setMeta(role, t)
+		return r.addTargets(path, &meta, expires)
 	}); err != nil {
 		return err
 	}
+	//t.Expires = expires.Round(time.Second)
+	//t.Version++
+	//return r.setMeta("targets.json", t)
+	return nil
+}
+
+func (r *Repo) addTargets(path string, meta *data.FileMeta, expires time.Time) error {
+	t, err := r.targets()
+	if err != nil {
+		return err
+	}
+	role := "targets.json"
+	pathHashBytes := sha256.Sum256([]byte(path))
+	pathHash := hex.EncodeToString(pathHashBytes[:])
+	var nextT *data.Targets
+	var nextRole string
+	for {
+		nextRole, nextT, err = r.nextDelegation(t, path, pathHash)
+		if err != nil {
+			return err
+		}
+		if nextT == nil {
+			break
+		}
+		role = nextRole
+		t = nextT
+	}
+	t.Targets[util.NormalizeTarget(path)] = *meta
 	t.Expires = expires.Round(time.Second)
 	t.Version++
-	return r.setMeta("targets.json", t)
+
+	return r.setMeta(role, t)
+}
+
+func (r *Repo) nextDelegation(t *data.Targets, path string, pathHash string) (string, *data.Targets, error) {
+	for _, role := range t.Delegations.Roles {
+		if r.checkPrefixes(role.PathHashPrefixes, pathHash) || r.checkPaths(role.Paths, path) {
+			targets, err := r.delegatedTargets(role.Name)
+			if err != nil {
+				return "", nil, err
+			}
+			return role.Name, targets, nil
+		}
+	}
+	return "", nil, nil
+
+}
+
+func (r *Repo) checkPrefixes(prefixes []string, pathHash string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(pathHash, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Repo) checkPaths(paths []string, path string) bool {
+	for _, p := range paths {
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Repo) RemoveTarget(path string) error {
